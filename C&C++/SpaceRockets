@@ -1,0 +1,278 @@
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include <time.h>
+
+#define G0 9.80665
+#define EARTH_ASCENT_COST 9.30
+
+#define CYAN "\033[1;36m"
+#define GREEN "\033[1;32m"
+#define RED "\033[1;31m"
+#define YELLOW "\033[1;33m"
+#define MAGENTA "\033[1;35m"
+#define RESET "\033[0m"
+
+
+
+typedef struct {
+    char name[64];
+    double wet_mass_kg;     
+    double dry_mass_kg;     
+    double isp_avg;         
+    double payload_leo_kg;  
+    double staging_factor;
+} Rocket;
+
+typedef struct {
+    char name[64];
+    double dv_transfer;     
+    double dv_capture;      
+    double synodic_days;    
+    char epoch_date[20];    
+} Body;
+
+typedef struct {
+    Rocket rocket;
+    Body body;
+    char start_date[20];
+    double payload_kg;
+} Mission;
+
+
+
+Rocket rockets[] = {
+    {"SpaceX's Starship", 5000000.0, 200000.0, 350.0, 150000.0, 1.4},
+    {"NASA's SLS", 2600000.0, 110000.0, 400.0, 95000.0, 1.5},
+    {"Blue Origin's New Glenn", 1700000.0, 100000.0, 340.0, 45000.0, 1.4},
+    {"ISRO's Mangalyaan 1 (PSLV)", 320000.0, 42000.0, 275.0, 1750.0, 1.2}
+};
+
+Body bodies[] = {
+    {"Moon", 3.12, 2.80, 29.5, "2025-01-13"},
+    {"Mars", 3.80, 2.10, 780.0, "2025-01-16"},
+    {"Titan (Saturn)", 7.30, 3.00, 378.1, "2025-09-21"}
+};
+
+
+
+void clean_stdin() { int c; while((c = getchar()) != '\n' && c != EOF); }
+
+time_t parse_date(const char* s) {
+    struct tm tm = {0};
+    int y,m,d;
+    if(sscanf(s,"%d-%d-%d",&y,&m,&d)!=3) return -1;
+    tm.tm_year=y-1900; tm.tm_mon=m-1; tm.tm_mday=d; tm.tm_isdst=-1;
+    return mktime(&tm);
+}
+
+void format_date(time_t t, char* s) {
+    struct tm* tm = localtime(&t);
+    strftime(s, 20, "%Y-%m-%d", tm);
+}
+
+void print_separator() {
+    printf(CYAN "+--------------------------------------------------------------------------------+\n" RESET);
+}
+
+
+
+double calc_capability(Rocket* r, double payload) {
+    if(payload > r->payload_leo_kg) return 0.0;
+    double m0 = r->wet_mass_kg + payload;
+    double mf = r->dry_mass_kg + payload;
+    return ((r->isp_avg * G0 * log(m0/mf)) / 1000.0) * r->staging_factor;
+}
+
+
+
+void print_phase_row(const char* phase, const char* time, const char* details) {
+    printf(" | %-24s | %-15s | %-34s |\n", phase, time, details);
+}
+
+
+void print_granular_timeline(Mission* m, int strategy) {
+    printf("\n");
+    print_separator();
+    if(strategy == 0) printf(GREEN  "      MISSION CHRONOLOGY: DIRECT PROFILE \n" RESET);
+    if(strategy == 1) printf(YELLOW "      MISSION CHRONOLOGY: OBERTH MANEUVER PROFILE \n" RESET);
+    if(strategy == 2) printf(MAGENTA"      MISSION CHRONOLOGY: ALTERNATE ROUTE (GRAVITY ASSIST) \n" RESET);
+    if(strategy == 3) printf(CYAN   "      MISSION CHRONOLOGY: REFUELING PROFILE \n" RESET);
+    if(strategy == 4) printf(YELLOW "      MISSION CHRONOLOGY: KICK STAGE PROFILE \n" RESET);
+    print_separator();
+    printf(" | %-24s | %-15s | %-34s |\n", "FLIGHT REGIME", "T-MINUS/PLUS", "ASTRODYNAMIC EVENT");
+    print_separator();
+
+ 
+    print_phase_row("Pre-Launch", "T- 00:00:10", "Go for Main Engine Start");
+    print_phase_row("Atmospheric Ascent", "T+ 00:01:10", "Max-Q (Max Dynamic Pressure)");
+    print_phase_row("LEO Insertion", "T+ 00:08:45", "SECO / Orbit Circularization");
+    
+  
+    if (strategy == 3) { 
+        print_phase_row(CYAN "Orbital Rendezvous" RESET, "T+ 24 Hours", CYAN "Tanker Docking & Fuel Transfer" RESET);
+        print_phase_row("Departure Burn", "T+ 26 Hours", "Fully Fueled Injection Burn");
+    } else if (strategy == 4) { 
+        print_phase_row(YELLOW "Kick Stage Separation" RESET, "T+ 01:00:00", YELLOW "Star 48 Motor Ignition" RESET);
+    }
+
+
+    if (strstr(m->body.name, "Titan") && strategy == 2) {
+      
+        print_phase_row("Deep Space Maneuver", "Year 1", "DSM-1 Course Adjust");
+        print_phase_row(MAGENTA "Venus Flyby" RESET, "Year 1.5", MAGENTA "Gravity Assist (Gain Velocity)" RESET);
+        print_phase_row(MAGENTA "Earth Flyby" RESET, "Year 2.5", MAGENTA "Gravity Assist (Slingshot)" RESET);
+        print_phase_row("Jupiter Flyby", "Year 4", "Correction / Observation");
+        print_phase_row("Saturn Arrival", "Year 7", "Orbital Insertion");
+    } else if (strstr(m->body.name, "Mars")) {
+        
+        if (strategy == 1) { 
+             print_phase_row("Orbit Raising", "Week 1-3", "Perigee Kicks");
+             print_phase_row("Trans-Mars Injection", "Week 4", "Escape Burn");
+        } else {
+             print_phase_row("Trans-Mars Injection", "T+ 2 Hours", "Escape Burn");
+        }
+        print_phase_row("Interplanetary Cruise", "Month 1-7", "Hohmann Transfer");
+        print_phase_row(MAGENTA "SOI Transition" RESET, "Arr - 2 Days", MAGENTA "Enter Mars Gravity Field" RESET);
+        print_phase_row("Atmospheric Entry", "Arr - 7 Mins", "Direct Entry (Aerocapture)");
+    } else {
+        
+        print_phase_row("Trans-Lunar Injection", "T+ 2 Hours", "TLI Burn");
+        print_phase_row(MAGENTA "SOI Transition" RESET, "T+ 2.5 Days", MAGENTA "Enter Lunar Gravity Field" RESET);
+        print_phase_row("Lunar Orbit Insertion", "T+ 3 Days", "LOI Burn");
+        print_phase_row("Descent Orbit Init", "Ldg - 1 Hour", "DOI Burn");
+        print_phase_row("Powered Descent", "Ldg - 12 Mins", "Braking Phase");
+    }
+    
+   
+    print_phase_row(GREEN "Touchdown" RESET, "Mission Clock", GREEN "Surface Contact Confirmed" RESET);
+    print_separator();
+}
+
+
+
+void run_mission(Mission* m) {
+    
+    double p1 = EARTH_ASCENT_COST;
+    double p2 = m->body.dv_transfer;
+    double p3 = m->body.dv_capture;
+    double total_req = p1 + p2 + p3;
+    double cap = calc_capability(&m->rocket, m->payload_kg);
+
+    /
+    int strategy = 0; 
+    double bonus_dv = 0.0;
+    char assumption_text[128] = "None";
+
+    double margin = cap - total_req;
+
+    if (margin < 0) {
+        
+        if (strstr(m->body.name, "Titan")) {
+            
+            strategy = 2;
+            bonus_dv = 4.5; 
+            strcpy(assumption_text, "Alternate Route: VEEGA Gravity Assists (7 Year Flight)");
+        } else if (strstr(m->rocket.name, "Starship")) {
+            
+            strategy = 3;
+            cap = 6.9; 
+            strcpy(assumption_text, "Assumption: LEO Refueling (1 Tanker Launch)");
+        } else if (margin > -1.5) {
+            
+            strategy = 4;
+            bonus_dv = 2.0;
+            strcpy(assumption_text, "Assumption: Added 'Star 48' Solid Kick Stage");
+        } else {
+            
+            strategy = -1; 
+        }
+    } else {
+   
+        if (strstr(m->rocket.name, "PSLV") && strstr(m->body.name, "Mars") && m->payload_kg <= 1500) {
+            strategy = 1;
+            bonus_dv = 6.5;
+        }
+    }
+
+    
+    double final_cap = (strategy == 3) ? cap : (cap + bonus_dv);
+    double final_margin = final_cap - total_req;
+    int success = (final_margin >= 0);
+
+    
+    printf("\n\n");
+    printf("========================================\n");
+    printf(" MISSION:  %s  >>>  %s\n", m->rocket.name, m->body.name);
+    printf(" PAYLOAD:  %.0f kg\n", m->payload_kg);
+    printf("========================================\n");
+
+    if (success) {
+        if (strategy == 0) printf(GREEN " STATUS:   [ DIRECT MISSION GO ] \n" RESET);
+        else               printf(YELLOW " STATUS:   [ ALTERNATE PROFILE GO ] \n" RESET);
+        
+        if (strategy != 0) printf(MAGENTA " METHOD:   %s\n" RESET, assumption_text);
+    } else {
+        printf(RED " STATUS:   [ IMPOSSIBLE (Even with assumptions) ] \n" RESET);
+    }
+
+    double fuel_pct = (success) ? 95.0 : 40.0; 
+    printf("\n TANK USAGE: %.1f %%\n", fuel_pct);
+    printf(" [===================.]\n");
+
+
+    if (success) {
+        print_granular_timeline(m, strategy);
+    } else {
+        printf(RED "\n [!] Physics Limit Reached. No viable route found.\n" RESET);
+    }
+
+
+    time_t start = parse_date(m->start_date);
+    time_t epoch = parse_date(m->body.epoch_date);
+    double cycle_sec = m->body.synodic_days * 86400.0;
+    double diff = difftime(start, epoch);
+    int cycles = (int)ceil(diff / cycle_sec);
+    if(diff < 0) cycles = 0; 
+    
+    printf("\n" CYAN " NEXT 5 LAUNCH WINDOWS:\n" RESET);
+    printf(" # | %-15s | %-15s\n", "LAUNCH DATE", "ARRIVAL (Est)");
+    printf("----------------------------------------\n");
+    for(int i=0; i<5; i++) {
+        time_t launch = epoch + (time_t)((cycles + i) * cycle_sec);
+        char l_str[20], a_str[20];
+        format_date(launch, l_str);
+        
+
+        double days = 3.0;
+        if (strstr(m->body.name, "Mars")) days = 260.0;
+        if (strstr(m->body.name, "Titan")) days = (strategy == 2) ? 2555.0 : 1000.0; // 7 years for Gravity Assist
+        
+        format_date(launch + (time_t)(days*86400.0), a_str);
+        printf(" %d | %-15s | %-15s\n", i+1, l_str, a_str);
+    }
+    printf("\n");
+}
+
+int main() {
+    Mission m; memset(&m,0,sizeof(m));
+    printf("\n--- SPACE MISSION PLANNER (ALTERNATE ROUTES) ---\n");
+    printf("1. SpaceX's Starship\n2. NASA's SLS\n3. Blue Origin's New Glenn\n4. ISRO's Mangalyaan 1 (PSLV)\nSelection > ");
+    int r; if(scanf("%d", &r)!=1) r=1; if(r<1||r>4) r=1; m.rocket = rockets[r-1];
+    
+    printf("\n1. Moon\n2. Mars\n3. Titan (Saturn)\nSelection > ");
+    int b; if(scanf("%d", &b)!=1) b=1; if(b<1||b>3) b=1; m.body = bodies[b-1];
+    
+    clean_stdin();
+    printf("\nStart Date (YYYY-MM-DD): ");
+    char buf[32]; fgets(buf,32,stdin); buf[strcspn(buf,"\n")]=0;
+    if(strlen(buf)<8) strcpy(m.start_date, "2025-01-01"); else strcpy(m.start_date, buf);
+    
+    printf("Payload Mass (kg): ");
+    scanf("%lf", &m.payload_kg);
+    
+    run_mission(&m);
+    return 0;
+}
