@@ -1,3 +1,20 @@
+/*
+space_mission_alternate.c
+
+UPDATES:
+- AUTO-RESCUE LOGIC: If a mission fails, the code applies a "fix":
+  1. GRAVITY ASSISTS: For outer planets (Titan), switches to VEEGA trajectory.
+  2. ORBITAL REFUELING: For Starship, assumes a tanker docking.
+  3. KICK STAGE: For smaller deficits, assumes a "Star 48" solid motor is added.
+- DYNAMIC TIMELINE: The timeline changes based on the "Fix" (e.g., adds "Venus Flyby" events).
+- UI: Clearly distinguishes between "Direct Success" and "Simulated Success".
+
+Compile:
+  gcc -o space_mission_alternate space_mission_alternate.c -lm
+
+Run:
+  ./space_mission_alternate
+*/
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,6 +25,7 @@
 #define G0 9.80665
 #define EARTH_ASCENT_COST 9.30
 
+// --- COLORS ---
 #define CYAN "\033[1;36m"
 #define GREEN "\033[1;32m"
 #define RED "\033[1;31m"
@@ -15,7 +33,7 @@
 #define MAGENTA "\033[1;35m"
 #define RESET "\033[0m"
 
-
+// ------------------ STRUCTURES ------------------
 
 typedef struct {
     char name[64];
@@ -41,7 +59,7 @@ typedef struct {
     double payload_kg;
 } Mission;
 
-
+// ------------------ DATABASE ------------------
 
 Rocket rockets[] = {
     {"SpaceX's Starship", 5000000.0, 200000.0, 350.0, 150000.0, 1.4},
@@ -56,7 +74,7 @@ Body bodies[] = {
     {"Titan (Saturn)", 7.30, 3.00, 378.1, "2025-09-21"}
 };
 
-
+// ------------------ HELPERS ------------------
 
 void clean_stdin() { int c; while((c = getchar()) != '\n' && c != EOF); }
 
@@ -77,7 +95,7 @@ void print_separator() {
     printf(CYAN "+--------------------------------------------------------------------------------+\n" RESET);
 }
 
-
+// ------------------ PHYSICS ------------------
 
 double calc_capability(Rocket* r, double payload) {
     if(payload > r->payload_leo_kg) return 0.0;
@@ -86,13 +104,13 @@ double calc_capability(Rocket* r, double payload) {
     return ((r->isp_avg * G0 * log(m0/mf)) / 1000.0) * r->staging_factor;
 }
 
-
+// ------------------ DYNAMIC TIMELINE ENGINE ------------------
 
 void print_phase_row(const char* phase, const char* time, const char* details) {
     printf(" | %-24s | %-15s | %-34s |\n", phase, time, details);
 }
 
-
+// strategy: 0=Direct, 1=Oberth, 2=GravityAssist, 3=Refueling, 4=KickStage
 void print_granular_timeline(Mission* m, int strategy) {
     printf("\n");
     print_separator();
@@ -105,30 +123,30 @@ void print_granular_timeline(Mission* m, int strategy) {
     printf(" | %-24s | %-15s | %-34s |\n", "FLIGHT REGIME", "T-MINUS/PLUS", "ASTRODYNAMIC EVENT");
     print_separator();
 
- 
+    // --- COMMON ASCENT ---
     print_phase_row("Pre-Launch", "T- 00:00:10", "Go for Main Engine Start");
     print_phase_row("Atmospheric Ascent", "T+ 00:01:10", "Max-Q (Max Dynamic Pressure)");
     print_phase_row("LEO Insertion", "T+ 00:08:45", "SECO / Orbit Circularization");
     
-  
-    if (strategy == 3) { 
+    // --- SPECIAL INSERTION PHASE ---
+    if (strategy == 3) { // Refueling
         print_phase_row(CYAN "Orbital Rendezvous" RESET, "T+ 24 Hours", CYAN "Tanker Docking & Fuel Transfer" RESET);
         print_phase_row("Departure Burn", "T+ 26 Hours", "Fully Fueled Injection Burn");
-    } else if (strategy == 4) { 
+    } else if (strategy == 4) { // Kick Stage
         print_phase_row(YELLOW "Kick Stage Separation" RESET, "T+ 01:00:00", YELLOW "Star 48 Motor Ignition" RESET);
     }
 
-
+    // --- CRUISE / MANEUVERS ---
     if (strstr(m->body.name, "Titan") && strategy == 2) {
-      
+        // GRAVITY ASSIST ROUTE
         print_phase_row("Deep Space Maneuver", "Year 1", "DSM-1 Course Adjust");
         print_phase_row(MAGENTA "Venus Flyby" RESET, "Year 1.5", MAGENTA "Gravity Assist (Gain Velocity)" RESET);
         print_phase_row(MAGENTA "Earth Flyby" RESET, "Year 2.5", MAGENTA "Gravity Assist (Slingshot)" RESET);
         print_phase_row("Jupiter Flyby", "Year 4", "Correction / Observation");
         print_phase_row("Saturn Arrival", "Year 7", "Orbital Insertion");
     } else if (strstr(m->body.name, "Mars")) {
-        
-        if (strategy == 1) { 
+        // MARS
+        if (strategy == 1) { // Oberth
              print_phase_row("Orbit Raising", "Week 1-3", "Perigee Kicks");
              print_phase_row("Trans-Mars Injection", "Week 4", "Escape Burn");
         } else {
@@ -138,7 +156,7 @@ void print_granular_timeline(Mission* m, int strategy) {
         print_phase_row(MAGENTA "SOI Transition" RESET, "Arr - 2 Days", MAGENTA "Enter Mars Gravity Field" RESET);
         print_phase_row("Atmospheric Entry", "Arr - 7 Mins", "Direct Entry (Aerocapture)");
     } else {
-        
+        // MOON
         print_phase_row("Trans-Lunar Injection", "T+ 2 Hours", "TLI Burn");
         print_phase_row(MAGENTA "SOI Transition" RESET, "T+ 2.5 Days", MAGENTA "Enter Lunar Gravity Field" RESET);
         print_phase_row("Lunar Orbit Insertion", "T+ 3 Days", "LOI Burn");
@@ -146,63 +164,63 @@ void print_granular_timeline(Mission* m, int strategy) {
         print_phase_row("Powered Descent", "Ldg - 12 Mins", "Braking Phase");
     }
     
-   
+    // --- LANDING ---
     print_phase_row(GREEN "Touchdown" RESET, "Mission Clock", GREEN "Surface Contact Confirmed" RESET);
     print_separator();
 }
 
-
+// ------------------ MAIN LOGIC ------------------
 
 void run_mission(Mission* m) {
-    
+    // 1. CALCULATE REQ & CAP
     double p1 = EARTH_ASCENT_COST;
     double p2 = m->body.dv_transfer;
     double p3 = m->body.dv_capture;
     double total_req = p1 + p2 + p3;
     double cap = calc_capability(&m->rocket, m->payload_kg);
 
-    /
-    int strategy = 0; 
+    // 2. DETERMINE STRATEGY
+    int strategy = 0; // 0=Direct
     double bonus_dv = 0.0;
     char assumption_text[128] = "None";
 
     double margin = cap - total_req;
 
     if (margin < 0) {
-        
+        // --- RESCUE LOGIC ---
         if (strstr(m->body.name, "Titan")) {
-            
+            // Titan usually fails direct. Switch to Gravity Assist.
             strategy = 2;
-            bonus_dv = 4.5; 
+            bonus_dv = 4.5; // Gain from VEEGA
             strcpy(assumption_text, "Alternate Route: VEEGA Gravity Assists (7 Year Flight)");
         } else if (strstr(m->rocket.name, "Starship")) {
-            
+            // Starship fails? Refuel.
             strategy = 3;
-            cap = 6.9; 
+            cap = 6.9; // Reset to fully fueled in LEO range
             strcpy(assumption_text, "Assumption: LEO Refueling (1 Tanker Launch)");
         } else if (margin > -1.5) {
-            
+            // Close call? Kick Stage.
             strategy = 4;
             bonus_dv = 2.0;
             strcpy(assumption_text, "Assumption: Added 'Star 48' Solid Kick Stage");
         } else {
-            
-            strategy = -1; 
+            // Still failing?
+            strategy = -1; // Truly impossible
         }
     } else {
-   
+        // Check for Mangalyaan
         if (strstr(m->rocket.name, "PSLV") && strstr(m->body.name, "Mars") && m->payload_kg <= 1500) {
             strategy = 1;
             bonus_dv = 6.5;
         }
     }
 
-    
+    // Recalculate with fixes
     double final_cap = (strategy == 3) ? cap : (cap + bonus_dv);
     double final_margin = final_cap - total_req;
     int success = (final_margin >= 0);
 
-    
+    // 3. REPORT
     printf("\n\n");
     printf("========================================\n");
     printf(" MISSION:  %s  >>>  %s\n", m->rocket.name, m->body.name);
@@ -218,18 +236,19 @@ void run_mission(Mission* m) {
         printf(RED " STATUS:   [ IMPOSSIBLE (Even with assumptions) ] \n" RESET);
     }
 
+    // FUEL GAUGE (Approx)
     double fuel_pct = (success) ? 95.0 : 40.0; 
     printf("\n TANK USAGE: %.1f %%\n", fuel_pct);
     printf(" [===================.]\n");
 
-
+    // 4. TIMELINE (Triggered even on "Simulated" success)
     if (success) {
         print_granular_timeline(m, strategy);
     } else {
         printf(RED "\n [!] Physics Limit Reached. No viable route found.\n" RESET);
     }
 
-
+    // 5. DATES
     time_t start = parse_date(m->start_date);
     time_t epoch = parse_date(m->body.epoch_date);
     double cycle_sec = m->body.synodic_days * 86400.0;
@@ -245,7 +264,7 @@ void run_mission(Mission* m) {
         char l_str[20], a_str[20];
         format_date(launch, l_str);
         
-
+        // Adjust travel time based on strategy
         double days = 3.0;
         if (strstr(m->body.name, "Mars")) days = 260.0;
         if (strstr(m->body.name, "Titan")) days = (strategy == 2) ? 2555.0 : 1000.0; // 7 years for Gravity Assist
